@@ -169,6 +169,14 @@ Queue::doNextEvent()
 void
 Queue::receivePacket(Packet& pkt) 
 {
+    if (pkt._is_inc) {
+        
+        if (_switch && pkt._inc_last_switch_id != (int)_switch->getID()) {
+            cout << "DEBUG_QUEUE: Handover to Switch " << _switch->getID() << "!" << endl;
+            _switch->receivePacket(pkt);
+            return; 
+        }
+    }
     if (_queuesize+pkt.size() > _maxsize) {
         /* if the packet doesn't fit in the queue, drop it */
         if (_logger) 
@@ -290,6 +298,15 @@ PriorityQueue::receivePacket(Packet& pkt)
 
         pkt.free();
         return;
+    }
+
+    if (pkt._is_inc) {
+        
+        if (_switch && pkt._inc_last_switch_id != (int)_switch->getID()) {
+            cout << "DEBUG_QUEUE: Handover to Switch " << _switch->getID() << "!" << endl;
+            _switch->receivePacket(pkt);
+            return; 
+        }
     }
 
     queue_priority_t prio = getPriority(pkt);
@@ -467,6 +484,15 @@ FairPriorityQueue::receivePacket(Packet& pkt)
         
         pkt.free();
         return;
+    }
+
+    if (pkt._is_inc) {
+        
+        if (_switch && pkt._inc_last_switch_id != (int)_switch->getID()) {
+            cout << "DEBUG_QUEUE: Handover to Switch " << _switch->getID() << "!" << endl;
+            _switch->receivePacket(pkt);
+            return; 
+        }
     }
 
     queue_priority_t prio = getPriority(pkt);

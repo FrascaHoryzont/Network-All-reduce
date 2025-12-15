@@ -100,7 +100,28 @@ CompositePrioQueue::doNextEvent() {
 void
 CompositePrioQueue::receivePacket(Packet& pkt)
 {
+    // --- DEBUG TOTALE ---
+    if (pkt._is_inc) {
+        cout << "DEBUG_COMP: Packet INC (" << pkt._inc_block_id << ") arrived at " << _nodename << endl;
+        
+        if (_switch) {
+             cout << "   -> Queue is attached to Switch ID: " << _switch->getID() << endl;
+             cout << "   -> Last Switch ID on Packet: " << pkt._inc_last_switch_id << endl;
+             
+             // Condizione di intercettazione
+             if (pkt._inc_last_switch_id != (int)_switch->getID()) {
+                 cout << "   -> INTERCEPTION TRIGGERED! Handing over to switch." << endl;
+                 _switch->receivePacket(pkt);
+                 return;
+             } else {
+                 cout << "   -> SKIPPED: Loop detected (Packet already handled by this switch)." << endl;
+             }
+        } else {
+             cout << "   -> ERROR: _switch pointer is NULL! This queue is orphaned." << endl;
+        }
+    }
     pkt.flow().logTraffic(pkt,*this,TrafficLogger::PKT_ARRIVE);
+    // --- FLARE/CANARY INTERCEPTION END ---
     if (!pkt.header_only()){
         if (_queuesize_low+pkt.size() <= _maxsize
             || ((pkt.path_len() == _enqueued_low.front()->path_len()) && drand()<0.5)

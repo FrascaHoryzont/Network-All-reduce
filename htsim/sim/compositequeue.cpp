@@ -4,6 +4,7 @@
 #include <iostream>
 #include <sstream>
 #include "ecn.h"
+#include  <random>
 
 static int global_queue_id=0;
 #define DEBUG_QUEUE_ID -1 // set to queue ID to enable debugging
@@ -77,7 +78,7 @@ bool CompositeQueue::decide_ECN() {
         return true;
     } else if (_queuesize_low > _ecn_minthresh) {
         uint64_t p = (0x7FFFFFFF * (_queuesize_low - _ecn_minthresh))/(_ecn_maxthresh - _ecn_minthresh);
-        if ((uint64_t)random() < p) {
+        if ((uint64_t)rand() < p) {
             return true;
         }
     }
@@ -149,11 +150,23 @@ void CompositeQueue::doNextEvent() {
 
 void CompositeQueue::receivePacket(Packet& pkt)
 {
-    if (_queue_id == DEBUG_QUEUE_ID)
-    {
-        cout << timeAsUs(eventlist().now()) << " name " << _nodename << " arrive "
-             << _queuesize_low * 8 / ((_bitrate / 1000000.0)) << " _queueid " << _queue_id << " switch " << _switch->getID() 
-             <<" flowid " << pkt.flow_id() << " ev " << pkt.pathid()<< endl;
+    if (pkt._is_inc) {
+        if (_switch) {
+            int pkt_sw = pkt._inc_last_switch_id;
+            int my_sw = (int)_switch->getID();
+            
+            if (pkt_sw != my_sw) {
+                // STAMPA MIGLIORATA: Include Flow ID e Sequence Number
+                cerr << "DIAG_QUEUE: Intercepting Pkt (AllocID " << pkt.id() 
+                     << ", Flow " << pkt.flow_id() 
+                     << ", Seq " << pkt._inc_block_id << ") " // Assumendo block_id = seq
+                     << " from Switch " << pkt_sw << " to My Switch " << my_sw << endl;
+                
+                _switch->receivePacket(pkt);
+                // cerr << "DIAG_QUEUE: Returned." << endl; // Rimuoviamo per pulizia
+                return; 
+            }
+        }
     }
     pkt.flow().logTraffic(pkt,*this,TrafficLogger::PKT_ARRIVE);
     if (_logger) _logger->logQueue(*this, QueueLogger::PKT_ARRIVE, pkt);

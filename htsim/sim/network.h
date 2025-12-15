@@ -8,6 +8,8 @@
 #include "loggertypes.h"
 #include "route.h"
 
+typedef uint32_t id_t;
+
 class Packet;
 class PacketFlow;
 class PacketSink;
@@ -49,6 +51,8 @@ typedef enum {IP, TCP, TCPACK, TCPNACK, SWIFT, SWIFTACK, STRACK, STRACKACK,
               ROCE, ROCEACK, ROCENACK,
               HPCC, HPCCACK, HPCCNACK,
               CNP,
+              INC_DATA,   // Pacchetto che porta dati da aggregare (All-Reduce)
+              INC_ACK,     // (Opzionale) Risposta broadcast finale
               EQDSDATA, EQDSPULL, EQDSACK, EQDSNACK, EQDSRTS,
               UECDATA, UECPULL, UECACK, UECNACK, UECRTS} packet_type;
 
@@ -67,12 +71,27 @@ class LosslessInputQueue;
 class Packet {
     friend class PacketFlow;
  public:
+
+    // --- AGGIUNTA FLARE / CANARY ---
+    // Identificano l'operazione di In-Network Computing
+    bool _is_inc = false;       // È un pacchetto da aggregare?
+    uint32_t _inc_job_id = 0;   // ID del Job (es. AllReduce #1)
+    uint32_t _inc_block_id = 0; // ID del blocco dati
+    uint32_t _inc_int_data = 0; // Payload semplice (intero) per testare la somma
+                                // In una simulazione reale useresti un vector,
+                                // ma per debug basta un int.
+
+    // Campi specifici per Canary (gestione dinamica)
+    bool _is_straggler = false; // Se è un pacchetto in ritardo gestito dal timeout
+    
+    int _inc_last_switch_id=-1;
+    
     // use PRIO_NONE if the packet is never expected to encounter a priority queue, otherwise default to PRIO_LO
     typedef enum {PRIO_LO, PRIO_MID, PRIO_HI, PRIO_NONE} PktPriority;
     
     /* empty constructor; Packet::set must always be called as
        well. It's a separate method, for convenient reuse */
-    Packet() {_is_header = false; _bounced = false; _type = IP; _flags = 0; _refcount = 0; _dst = UINT32_MAX; _pathid = UINT32_MAX; _direction = NONE; _ingressqueue = NULL;} 
+    Packet() {_is_header = false; _bounced = false; _type = IP; _flags = 0; _refcount = 0; _dst = UINT32_MAX; _pathid = UINT32_MAX; _direction = NONE; _ingressqueue = NULL; _route = 0; _nexthop = 0; _oldnexthop = 0; _is_inc = false; _inc_job_id = 0; _inc_block_id = 0; _inc_int_data = 0; _is_straggler = false; _inc_last_switch_id = -1; _next_routed_hop = 0;} 
 
     /* say "this packet is no longer wanted". (doesn't necessarily
        destroy it, so it can be reused) */
@@ -207,6 +226,30 @@ class Packet {
     static PacketFlow _defaultFlow;
     LosslessInputQueue* _ingressqueue;
     uint32_t _path_len; // length of the path in hops - used in BCube priority routing with NDP
+};
+
+// INCOLLA QUESTO PRIMA DI #endif IN sim/network.h
+
+class IncPacket : public Packet {
+public:
+    IncPacket(uint32_t job_id, uint32_t block_id) {
+        _is_inc = true;
+        _inc_job_id = job_id;
+        _inc_block_id = block_id;
+        _type = INC_DATA; // Usa il tipo che abbiamo aggiunto all'enum
+        _size = 1000;     // Dimensione fittizia del payload aggregato
+        
+        // Assegniamo un flusso di default per evitare crash nei log
+        _flow = &_defaultFlow; 
+    }
+
+    // Dobbiamo implementare questo metodo virtuale puro
+    virtual PktPriority priority() const { return PRIO_LO; }
+    
+    // Metodo helper statico che cercavi prima
+    static IncPacket* new_inc_packet(uint32_t job_id, uint32_t block_id) {
+        return new IncPacket(job_id, block_id);
+    }
 };
 
 class PacketSink {

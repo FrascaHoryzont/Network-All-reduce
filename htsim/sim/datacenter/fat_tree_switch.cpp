@@ -41,6 +41,12 @@ void FatTreeSwitch::receivePacket(Packet& pkt){
         return;
     }
 
+    if (pkt._is_inc) {
+            // Chiamiamo esplicitamente la logica della classe base che abbiamo modificato
+            Switch::handle_inc_packet(&pkt); 
+            return; 
+        }
+
     if (_packets.find(&pkt)==_packets.end()){
         //ingress pipeline processing.
 

@@ -108,6 +108,22 @@ ECNPrioQueue::receivePacket(Packet& pkt)
     pkt.flow().logTraffic(pkt,*this,TrafficLogger::PKT_ARRIVE);
     queue_priority_t prio = getPriority(pkt);
 
+    // --- FLARE/CANARY INTERCEPTION START ---
+    if (pkt._is_inc) {
+        // Se c'è uno switch attaccato a questa coda...
+        if (_switch) {
+            // ...e non è lo switch che ha appena generato il pacchetto...
+            if (pkt._inc_last_switch_id != (int)_switch->getID()) {
+                cout << "!!! ECN SWITCH INTERCEPTION !!! Queue " << _nodename 
+                     << " handing over to Switch " << _switch->getID() << endl;
+                
+                _switch->receivePacket(pkt);
+                return; // STOP! Lo switch prende il controllo.
+            }
+        }
+    }
+    // --- FLARE/CANARY INTERCEPTION END ---
+
     if (_queuesize[prio] + pkt.size() > _maxsize[prio]
         || ( (_queuesize[prio] + 2 * pkt.size() > _maxsize[prio]) && (rand()&0x01))) {
         // this is a droptail queue but drop randomly on the last slot to try and reduce simulator phase effects

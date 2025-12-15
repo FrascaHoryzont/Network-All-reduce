@@ -68,6 +68,17 @@ LosslessQueue::receivePacket(Packet& pkt)
         return;
     }
 
+    // --- FLARE/CANARY INTERCEPTION ---
+    if (pkt._is_inc) {
+        if (_switch && pkt._inc_last_switch_id != (int)_switch->getID()) {
+            cout << "!!! LOSSLESS SWITCH INTERCEPTION !!! Queue " << _nodename 
+                 << " handing over to Switch " << _switch->getID() << endl;
+            
+            _switch->receivePacket(pkt);
+            return; 
+        }
+    }
+
     /* normal packet, enqueue it */
 
     pkt.flow().logTraffic(pkt, *this, TrafficLogger::PKT_ARRIVE);

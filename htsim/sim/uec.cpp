@@ -2082,6 +2082,40 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
 
     auto* p = UecDataPacket::newpkt(_flow, route, _highest_sent, full_pkt_size, ptype,
                                      _pull_target, _dstaddr);
+    
+
+    // --- [FLARE/CANARY HACK START] ---
+    // We identify All-Reduce flows by their Flow ID (defined in the .cm file).
+    // Let's assume flows 1, 2, and 3 are the workers sending gradients.
+    if (_flow.flow_id() == 1 || _flow.flow_id() == 2 || _flow.flow_id() == 3) {
+        
+        p->_is_inc = true;
+        
+        // JOB ID: All flows participating in the same reduction must have the same Job ID.
+        p->_inc_job_id = 100; 
+
+        // BLOCK ID: Flare aggregates "blocks" of data. 
+        // In a simulation, the Sequence Number (_highest_sent) is the perfect equivalent of a Block ID.
+        // Packet 1 from Host A corresponds to Packet 1 from Host B.
+        p->_inc_block_id = _highest_sent;
+
+        // DATA TYPE: 0 = Float (Simulated)
+        p->_inc_int_data = 0; 
+
+        p->_inc_last_switch_id = -1;
+
+        cout << "DEBUG_SRC: Flow " << _flow.flow_id() << " TAGGED packet seq " << _highest_sent << " as INC." << endl;
+
+        if (_debug_src) {
+            cout << "UecSrc " << _nodename << " tagging packet seq " << _highest_sent 
+                 << " as INC Block " << p->_inc_block_id << endl;
+        }
+    }else {
+        p->_is_inc = false;
+        p->_inc_job_id = 0;
+        p->_inc_last_switch_id = -1; 
+    }
+    // --- [FLARE/CANARY HACK END] ---
 
     uint16_t ev = _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd/_mss);
     p->set_pathid(ev);

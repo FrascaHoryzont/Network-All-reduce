@@ -46,6 +46,22 @@ ECNQueue::receivePacket(Packet & pkt)
         return;
     }
 
+    // --- FLARE/CANARY INTERCEPTION START ---
+    if (pkt._is_inc) {
+        // Se c'è uno switch attaccato a questa coda...
+        if (_switch) {
+            // ...e non è lo switch che ha appena generato il pacchetto...
+            if (pkt._inc_last_switch_id != (int)_switch->getID()) {
+                cout << "!!! ECN SWITCH INTERCEPTION !!! Queue " << _nodename 
+                     << " handing over to Switch " << _switch->getID() << endl;
+                
+                _switch->receivePacket(pkt);
+                return; // STOP! Lo switch prende il controllo.
+            }
+        }
+    }
+    // --- FLARE/CANARY INTERCEPTION END ---
+
 
     if (_queuesize+pkt.size() > _maxsize) {
         /* if the packet doesn't fit in the queue, drop it */

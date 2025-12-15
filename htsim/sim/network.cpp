@@ -141,6 +141,9 @@ Packet::unbounce(uint16_t pktsize) {
 
 void 
 Packet::free() {
+    if (_is_inc) {
+        delete this; // Per i pacchetti INC creati con 'new IncPacket'
+    }
 }
 
 string
@@ -255,6 +258,10 @@ Packet::str() const {
     case UECRTS:
         s = "UECRTS";
         break;
+    case INC_DATA:
+        return "INC_DATA";
+    case INC_ACK:
+        return "INC_ACK";
     }
     return s;
 }
