@@ -17,10 +17,17 @@ add_compile_options(
     -Wsign-compare
     -Wuninitialized
     -fPIE
-    -O3
+    -O0
+    -fsanitize=address
+    -fno-omit-frame-pointer
+    -fsanitize=undefined
 )
 # Optionally enable sanitizers
 # -fsanitize=address -fno-omit-frame-pointer -fsanitize=undefined"
+add_link_options(
+    -fsanitize=address
+    -fsanitize=undefined
+)
 
 if ( ENABLE_TESTS ) 
     # Fetch GoogleTest

@@ -88,7 +88,6 @@ void Switch::handle_inc_packet(Packet* p) {
     if (current_count >= expected_children) {
         // Usa CERR per essere sicuro di vederlo anche se crasha subito dopo
         cerr << "!!! AGGREGATION COMPLETE !!! Switch " << _id << " Block " << block_id << endl;
-        
         send_aggregated_packet(job_id, block_id);
         _aggregation_table.erase(key);
     } 
@@ -100,7 +99,7 @@ void Switch::handle_inc_packet(Packet* p) {
 void Switch::send_aggregated_packet(uint32_t job_id, uint32_t block_id) {
     Packet* p = new IncPacket(job_id, block_id);
     p->_inc_last_switch_id = getID(); 
-    p->set_size(1000); 
+    p->set_size(Packet::data_packet_size());
 
     int best_port = select_best_port_towards_spine();
 

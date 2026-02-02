@@ -782,6 +782,7 @@ int main(int argc, char **argv) {
     }
 
     mem_b cwnd_b = cwnd*Packet::data_packet_size();
+        
     for (size_t c = 0; c < all_conns->size(); c++){
         connection* crt = all_conns->at(c);
         int src = crt->src;
@@ -832,11 +833,15 @@ int main(int argc, char **argv) {
                 flow_pdc_map[uec_src->flowId()] = pdc;
             }
 
+            UecNIC* nic_to_use = (dest == UINT32_MAX) ? nics.at(src).get() : nics.at(dest).get();
+            UecPullPacer* pacer_to_use = (dest == UINT32_MAX) ? pacers[src].get() : pacers[dest].get();
+
             if (receiver_driven)
-                uec_snk = new UecSink(NULL, pacers[dest].get(), *nics.at(dest),
-                                      ports);
-            else //each connection has its own pacer, so receiver driven mode does not kick in! 
-                uec_snk = new UecSink(NULL,linkspeed,1.1,UecBasePacket::unquantize(UecSink::_credit_per_pull),eventlist,*nics.at(dest), ports);
+                uec_snk = new UecSink(NULL, pacer_to_use, *nic_to_use, ports);
+            else 
+                uec_snk = new UecSink(NULL, linkspeed, 1.1, 
+                                      UecBasePacket::unquantize(UecSink::_credit_per_pull), 
+                                      eventlist, *nic_to_use, ports);
 
             flowmap[uec_src->flowId()] = { uec_src, uec_snk };
 
@@ -865,6 +870,7 @@ int main(int argc, char **argv) {
             }
             uec_srcs.push_back(uec_src);
             uec_src->setDst(dest);
+
 
             if (log_flow_events) {
                 uec_src->logFlowEvents(*event_logger);
@@ -947,9 +953,13 @@ int main(int argc, char **argv) {
                         srctotor->push_back(topo[p]->queues_ns_nlp[src][topo_cfg->HOST_POD_SWITCH(src)][0]->getRemoteEndpoint());
 
                         Route* dsttotor = new Route();
-                        dsttotor->push_back(topo[p]->queues_ns_nlp[dest][topo_cfg->HOST_POD_SWITCH(dest)][0]);
-                        dsttotor->push_back(topo[p]->pipes_ns_nlp[dest][topo_cfg->HOST_POD_SWITCH(dest)][0]);
-                        dsttotor->push_back(topo[p]->queues_ns_nlp[dest][topo_cfg->HOST_POD_SWITCH(dest)][0]->getRemoteEndpoint());
+                        
+                        // Se la destinazione è #, usiamo la sorgente come destinazione fittizia per la rotta
+                        int routing_dest = (dest == UINT32_MAX) ? src : dest;
+
+                        dsttotor->push_back(topo[p]->queues_ns_nlp[routing_dest][topo_cfg->HOST_POD_SWITCH(routing_dest)][0]);
+                        dsttotor->push_back(topo[p]->pipes_ns_nlp[routing_dest][topo_cfg->HOST_POD_SWITCH(routing_dest)][0]);
+                        dsttotor->push_back(topo[p]->queues_ns_nlp[routing_dest][topo_cfg->HOST_POD_SWITCH(routing_dest)][0]->getRemoteEndpoint());
 
                         uec_src->connectPort(p, *srctotor, *dsttotor, *uec_snk, crt->start);
                         //uec_src->setPaths(path_entropy_size);
@@ -959,7 +969,11 @@ int main(int argc, char **argv) {
                         assert(topo[p]->switches_lp[topo_cfg->HOST_POD_SWITCH(src)]);
                         assert(topo[p]->switches_lp[topo_cfg->HOST_POD_SWITCH(src)]);
                         topo[p]->switches_lp[topo_cfg->HOST_POD_SWITCH(src)]->addHostPort(src,uec_snk->flowId(),uec_src->getPort(p));
-                        topo[p]->switches_lp[topo_cfg->HOST_POD_SWITCH(dest)]->addHostPort(dest,uec_src->flowId(),uec_snk->getPort(p));
+                        
+                        // Registra sullo switch di DESTINAZIONE solo se esiste davvero
+                        if (dest != UINT32_MAX) {
+                            topo[p]->switches_lp[topo_cfg->HOST_POD_SWITCH(dest)]->addHostPort(dest,uec_src->flowId(),uec_snk->getPort(p));
+                        }
                         break;
                     }
                 default:

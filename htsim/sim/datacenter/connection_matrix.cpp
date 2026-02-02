@@ -745,7 +745,12 @@ bool ConnectionMatrix::load(istream& file){
             c->recv_done_trigger = 0;
             c->trigger = 0;
             c->src = stoi(tokens[0]);
-            c->dst = stoi(tokens[0].substr(dstix));
+            string destination_part = tokens[0].substr(dstix);
+            if(destination_part=="#"){
+                c->dst=UINT32_MAX;
+            } else {
+                c->dst = stoi(destination_part);
+            }
             c->priority = 2000000;
             c->start = NO_START;
             for (size_t i = 1; i < tokens.size(); i++) {

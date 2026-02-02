@@ -2087,7 +2087,7 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
     // --- [FLARE/CANARY HACK START] ---
     // We identify All-Reduce flows by their Flow ID (defined in the .cm file).
     // Let's assume flows 1, 2, and 3 are the workers sending gradients.
-    if (_flow.flow_id() == 1 || _flow.flow_id() == 2 || _flow.flow_id() == 3) {
+    if (_dstaddr == UINT32_MAX) {
         
         p->_is_inc = true;
         
@@ -2161,7 +2161,7 @@ mem_b UecSrc::sendRtxPacket(const Route& route) {
     
     auto* p = UecDataPacket::newpkt(_flow, route, seq_no, full_pkt_size, UecDataPacket::DATA_RTX,
                                      _pull_target, _dstaddr);
-
+                                     
     uint16_t ev = _mp->nextEntropy(_highest_sent, (uint64_t)_cwnd/_mss);
     p->set_pathid(ev);
     p->flow().logTraffic(*p, *this, TrafficLogger::PKT_CREATESEND);

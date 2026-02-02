@@ -246,6 +246,11 @@ public:
     // Dobbiamo implementare questo metodo virtuale puro
     virtual PktPriority priority() const { return PRIO_LO; }
     
+    //set type per INC RESULT
+    void setType(packet_type t) {
+        _type = t;
+    }
+    
     // Metodo helper statico che cercavi prima
     static IncPacket* new_inc_packet(uint32_t job_id, uint32_t block_id) {
         return new IncPacket(job_id, block_id);

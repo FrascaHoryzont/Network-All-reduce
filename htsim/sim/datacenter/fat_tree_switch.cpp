@@ -26,6 +26,7 @@ FatTreeSwitch::~FatTreeSwitch() {
 }
 
 void FatTreeSwitch::receivePacket(Packet& pkt){
+    //cout << "SWITCH " << _id << " DIAG_FAT_TREE_SWITCH: Entered receivePacket for Pkt " << pkt.id() << endl;
     if (pkt.type()==ETH_PAUSE){
         EthPausePacket* p = (EthPausePacket*)&pkt;
         //I must be in lossless mode!
@@ -38,6 +39,10 @@ void FatTreeSwitch::receivePacket(Packet& pkt){
             }
         }
         
+        return;
+    }
+    if (pkt._inc_last_switch_id == (int)getID()) {
+        pkt.free();
         return;
     }
 
@@ -332,6 +337,85 @@ uint16_t FatTreeSwitch::_trim_size = 64;
 bool FatTreeSwitch::_disable_trim = false;
 
 Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
+    //cout<<pkt.dst()<<" "<<_type<<endl;
+    if (pkt.dst() == UINT32_MAX) {
+        // Se siamo un ToR, mandiamo sempre SU verso un Aggregation Switch.
+        // Non usiamo la FIB per evitare di allocare vettori enormi.
+        if (_type == TOR) {
+            uint32_t podid;
+            uint32_t agg_min, agg_max;
+
+            // Logica per trovare gli switch sopra di noi (copiata dalla logica standard)
+            if (_ft->cfg().get_tiers() == 3) {
+                podid = _id / _ft->cfg().tor_switches_per_pod();
+                agg_min = _ft->cfg().MIN_POD_AGG_SWITCH(podid);
+                agg_max = _ft->cfg().MAX_POD_AGG_SWITCH(podid);
+            } else {
+                agg_min = 0;
+                agg_max = _ft->cfg().getNAGG() - 1;
+            }
+
+            // Scegliamo un Aggregation Switch a caso (ECMP semplice) per bilanciare
+            // Usiamo l'hash del flusso per coerenza
+            uint32_t num_agg = agg_max - agg_min + 1;
+            uint32_t choice = freeBSDHash(pkt.flow_id(), pkt.pathid(), _hash_salt) % num_agg;
+            uint32_t target_agg = agg_min + choice;
+            uint32_t b = 0; // bundle 0
+
+            // Costruiamo la rotta al volo
+            Route* r = new Route();
+            r->push_back(_ft->queues_nlp_nup[_id][target_agg][b]);
+            r->push_back(_ft->pipes_nlp_nup[_id][target_agg][b]);
+            r->push_back(_ft->queues_nlp_nup[_id][target_agg][b]->getRemoteEndpoint());
+            
+            pkt.set_direction(UP);
+            return r;
+        }
+        else if (_type == AGG) {
+            
+            // Se siamo in una rete a 3 livelli, dobbiamo salire ancora verso i CORE
+            if (_ft->cfg().get_tiers() == 3) {
+                // Calcoli presi dalla logica standard AGG->CORE
+                uint32_t podpos = _id % _ft->cfg().agg_switches_per_pod();
+                // Numero di uplink disponibili verso i Core
+                uint32_t uplink_bundles = _ft->cfg().radix_up(AGG_TIER) / _ft->cfg().bundlesize(CORE_TIER);
+                
+                if (uplink_bundles == 0) return NULL;
+
+                // Scegliamo un uplink a caso (ECMP)
+                uint32_t l = freeBSDHash(pkt.flow_id(), pkt.pathid(), _hash_salt) % uplink_bundles;
+                
+                // Calcola l'ID del Core switch target
+                uint32_t core = l * _ft->cfg().agg_switches_per_pod() + podpos;
+                uint32_t b = 0; 
+
+                Route* r = new Route();
+                // Nota: qui si usa queues_nup_nc (Up to Core)
+                r->push_back(_ft->queues_nup_nc[_id][core][b]);
+                r->push_back(_ft->pipes_nup_nc[_id][core][b]);
+                r->push_back(_ft->queues_nup_nc[_id][core][b]->getRemoteEndpoint());
+
+                pkt.set_direction(UP);
+                return r;
+            } 
+            else {
+                // Se siamo in una rete a 2 livelli (come small_fat_tree),
+                // l'Aggregation Switch è la cima (Root/Spine).
+                // Non deve inoltrare oltre, il pacchetto muore qui (processato da handle_inc_packet).
+                return NULL;
+            }
+        }
+        
+        // ---------------------------------------------------------
+        // CASO 3: Switch CORE (Livello 2 - Cima)
+        // ---------------------------------------------------------
+        else if (_type == CORE) {
+            // Siamo in cima. Stop.
+            abort();
+        }
+
+        abort();
+    }
     vector<FibEntry*> * available_hops = _fib->getRoutes(pkt.dst());
 
     if (available_hops){
