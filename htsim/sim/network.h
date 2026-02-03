@@ -53,6 +53,7 @@ typedef enum {IP, TCP, TCPACK, TCPNACK, SWIFT, SWIFTACK, STRACK, STRACKACK,
               CNP,
               INC_DATA,   // Pacchetto che porta dati da aggregare (All-Reduce)
               INC_ACK,     // (Opzionale) Risposta broadcast finale
+              INC_RESULT,  // Pacchetto che riporta il risultato dell'aggregazione
               EQDSDATA, EQDSPULL, EQDSACK, EQDSNACK, EQDSRTS,
               UECDATA, UECPULL, UECACK, UECNACK, UECRTS} packet_type;
 
@@ -228,35 +229,6 @@ class Packet {
     uint32_t _path_len; // length of the path in hops - used in BCube priority routing with NDP
 };
 
-// INCOLLA QUESTO PRIMA DI #endif IN sim/network.h
-
-class IncPacket : public Packet {
-public:
-    IncPacket(uint32_t job_id, uint32_t block_id) {
-        _is_inc = true;
-        _inc_job_id = job_id;
-        _inc_block_id = block_id;
-        _type = INC_DATA; // Usa il tipo che abbiamo aggiunto all'enum
-        _size = 1000;     // Dimensione fittizia del payload aggregato
-        
-        // Assegniamo un flusso di default per evitare crash nei log
-        _flow = &_defaultFlow; 
-    }
-
-    // Dobbiamo implementare questo metodo virtuale puro
-    virtual PktPriority priority() const { return PRIO_LO; }
-    
-    //set type per INC RESULT
-    void setType(packet_type t) {
-        _type = t;
-    }
-    
-    // Metodo helper statico che cercavi prima
-    static IncPacket* new_inc_packet(uint32_t job_id, uint32_t block_id) {
-        return new IncPacket(job_id, block_id);
-    }
-};
-
 class PacketSink {
  public:
     PacketSink() { _remoteEndpoint = NULL; }
@@ -344,6 +316,60 @@ class PacketDB {
  protected:
     vector<P*> _freelist; // Irek says it's faster with vector than with list
     int _alloc_count;
+};
+class IncPacket : public Packet {
+public:
+    // Database per il riciclo della memoria (standard del simulatore)
+    static PacketDB<IncPacket> _packetdb;
+
+    inline static IncPacket* newpkt(const Route& route, 
+                                    uint32_t job_id, uint32_t block_id, 
+                                    uint32_t int_data = 0,
+                                    packet_type p_type = INC_DATA) {
+        
+        // 1. Alloca dal database invece che con 'new'
+        IncPacket* p = _packetdb.allocPacket();
+        
+        // 2. Inizializzazione tramite base class (imposta flow, route, size, id)
+        // Usiamo una dimensione standard (es. 1000 byte) o data_packet_size()
+        p->set_route(_defaultFlow, route, 1000, 0); 
+
+        // 3. Configurazione campi specifici INC
+        p->_type = p_type;
+        p->_is_inc = true;  // Campo che avevi aggiunto in Packet
+        p->_inc_job_id = job_id;
+        p->_inc_block_id = block_id;
+        p->_inc_int_data = int_data;
+        
+        // 4. Reset stati di default (evita residui da pacchetti riutilizzati)
+        p->_is_header = false;
+        p->_bounced = false;
+        p->_is_straggler = false;
+        p->_inc_last_switch_id = -1;
+        p->_direction = NONE;
+        p->_path_len = route.size();
+
+        return p;
+    }
+
+    // Distruttore virtuale
+    virtual ~IncPacket() {}
+
+    // Implementazione obbligatoria del metodo virtuale puro
+    virtual PktPriority priority() const override { 
+        // I pacchetti INC solitamente hanno priorità alta o media per ridurre la latenza di sincronizzazione
+        return PRIO_MID; 
+    }
+
+    // Override di free per tornare nel database corretto
+    virtual void free() override {
+        _packetdb.freePacket(this);
+    }
+
+    // Metodo helper per cambiare il tipo durante il tragitto (es. da DATA a RESULT)
+    void make_result() {
+        _type = INC_RESULT;
+    }
 };
 
 

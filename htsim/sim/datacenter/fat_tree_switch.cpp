@@ -5,6 +5,7 @@
 #include "callback_pipe.h"
 #include "queue_lossless.h"
 #include "queue_lossless_output.h"
+#include "network.h"
 
 unordered_map<BaseQueue*,uint32_t> FatTreeSwitch::_port_flow_counts;
 
@@ -41,16 +42,25 @@ void FatTreeSwitch::receivePacket(Packet& pkt){
         
         return;
     }
+    if (pkt._is_inc) {
+        if (!hasUpLinks()) {
+             // Siamo in cima (Spine/Agg in 2-tier). 
+             // Qui l'aggregazione è finita globalmente.
+             // Dobbiamo trasformare il pacchetto in un RESULT e mandarlo GIÙ.
+             cout << "!!! GLOBAL AGGREGATION COMPLETE !!! Root Switch " << _id 
+                  << " broadcasting RESULT DOWN for Block " << pkt._inc_block_id << endl;
+             
+             // TODO: Implementare send_inc_result_down(&pkt);
+             pkt.free();
+             return;
+        }
+        handle_inc_packet(&pkt); 
+        return; 
+    }
     if (pkt._inc_last_switch_id == (int)getID()) {
         pkt.free();
         return;
     }
-
-    if (pkt._is_inc) {
-            // Chiamiamo esplicitamente la logica della classe base che abbiamo modificato
-            Switch::handle_inc_packet(&pkt); 
-            return; 
-        }
 
     if (_packets.find(&pkt)==_packets.end()){
         //ingress pipeline processing.
@@ -58,6 +68,10 @@ void FatTreeSwitch::receivePacket(Packet& pkt){
         _packets[&pkt] = true;
 
         const Route * nh = getNextHop(pkt,NULL);
+        if (nh == NULL) {
+            pkt.free();
+            return;
+        }
         //set next hop which is peer switch.
         pkt.set_route(*nh);
 
@@ -65,11 +79,11 @@ void FatTreeSwitch::receivePacket(Packet& pkt){
         _pipe->receivePacket(pkt); 
     }
     else {
-        _packets.erase(&pkt);
-        
-        //egress queue processing.
-        //cout << "Switch type " << _type <<  " id " << _id << " pkt dst " << pkt.dst() << " dir " << pkt.get_direction() << endl;
-        pkt.sendOn();
+        if (pkt.nexthop() < pkt.route()->size()) {
+            pkt.sendOn();
+        } else {
+            pkt.free();
+        }
     }
 };
 
@@ -622,3 +636,104 @@ Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
     //FIB has been filled in; return choice. 
     return getNextHop(pkt, ingress_port);
 };
+bool FatTreeSwitch::hasUpLinks(){  
+    if (_type == CORE) {
+        return false;
+    }
+    if (_type == TOR) {
+        return true;
+    }
+    if (_type == AGG) {
+        return (_ft->cfg().get_tiers() > 2);
+    }
+    return false;
+}
+void FatTreeSwitch::handle_inc_packet(Packet* p) {
+    uint32_t job_id = p->_inc_job_id;
+    uint32_t block_id = p->_inc_block_id;
+    
+    // Identifichiamo il flusso (o lo switch precedente)
+    uint32_t contributor_id = (p->_inc_last_switch_id != -1) ? (uint32_t)p->_inc_last_switch_id : p->flow_id();
+
+    auto key = std::make_pair(job_id, block_id);
+    
+    if (_aggregation_table.find(key) == _aggregation_table.end()) {
+        AggregationEntry entry;
+        entry.first_arrival = eventlist().now();
+        _aggregation_table[key] = entry;
+    }
+
+    // Inseriamo nel SET per evitare di contare i duplicati (Retransmission Storm)
+    _aggregation_table[key].received_flows.insert(contributor_id);
+    
+    int current_count = _aggregation_table[key].received_flows.size();
+    
+    // --- SOGLIA ---
+    // Imposta a 2 perché nel tuo test hai Node 0 e Node 1 che inviano.
+    int expected_children = 2; 
+
+    if (current_count >= expected_children) {
+        _aggregation_table.erase(key);
+        if (hasUpLinks()) {
+            cerr << "!!! AGGREGATION COMPLETE !!! Switch " << _id << " (Intermediate) -> Sending UP" << endl;
+            send_aggregated_packet(job_id, block_id); 
+        } else {
+            cerr << "!!! AGGREGATION COMPLETE !!! Switch " << _id << " (ROOT) -> Broadcasting DOWN" << endl;
+            //send_inc_results(job_id, block_id);
+        }
+    } 
+    
+    // Consuma sempre il pacchetto in ingresso
+    p->free();
+}
+
+void FatTreeSwitch::send_aggregated_packet(uint32_t job_id, uint32_t block_id) {
+    int best_port = select_best_port_towards_spine();
+    int result = 0;
+    if (best_port == -1) {
+        // cout << "DEBUG_SWITCH: Switch " << _id << " is Root (or isolated). Aggregation finished." << endl;
+        return;
+    }
+    BaseQueue* q = _ports.at(best_port);
+    PacketSink* next_hop_sink = q->getRemoteEndpoint();
+    if (!next_hop_sink) {
+        cerr << "CRITICAL ERROR: Switch " << _id << " selected Port " << best_port 
+             << " but endpoint is NULL (Link disconnected)!" << endl;
+        return;
+    }
+
+    Route* route = new Route();
+    route->push_back(next_hop_sink);
+
+    IncPacket* p = IncPacket::newpkt(*route, job_id, block_id, result, INC_DATA);
+
+    p->_inc_last_switch_id = getID();
+    
+    p->set_next_hop(next_hop_sink);
+
+    // Debug Log
+    cout << "DEBUG_SWITCH: Switch " << _id << " Sending Aggregated Block " << block_id 
+         << " UP via Port " << best_port 
+         << " to Node " << next_hop_sink->nodename() << endl;
+
+    q->receivePacket(*p);
+}
+
+int FatTreeSwitch::select_best_port_towards_spine() {
+    int best_port = -1;
+    uint64_t min_size = UINT64_MAX;
+
+    // Itera sulle porte UP (da 2 in poi per Small Fat Tree)
+    for (size_t i = 2; i < _ports.size(); i++) {
+        BaseQueue* q = _ports.at(i);
+        
+        // CHECK CRUCIALE: La porta DEVE avere un cavo collegato
+        if (q->getRemoteEndpoint() != NULL) { 
+            if (q->queuesize() < min_size) {
+                min_size = q->queuesize();
+                best_port = i;
+            }
+        }
+    }
+    return best_port;
+}

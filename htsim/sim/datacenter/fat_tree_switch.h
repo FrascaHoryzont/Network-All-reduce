@@ -100,7 +100,22 @@ public:
   
     virtual void receivePacket(Packet& pkt);
     virtual Route* getNextHop(Packet& pkt, BaseQueue* ingress_port);
-    virtual uint32_t getType() {return _type;}
+    virtual uint32_t getType() {return _type;};
+    virtual bool hasUpLinks();
+
+    // --- [FLARE/CANARY] Membri Privati ---
+    
+    // Tabella di aggregazione: Key = <Job_ID, Block_ID>
+    std::map<std::pair<uint32_t, uint32_t>, AggregationEntry> _aggregation_table;
+
+    // Timeout per Canary (default 1 microsecondo)
+    simtime_picosec _inc_timeout = 1000; 
+
+    // Funzioni helper che implementeremo in switch.cpp
+    void handle_inc_packet(Packet* p);
+    void send_aggregated_packet(uint32_t job_id, uint32_t block_id);
+    int select_best_port_towards_spine();
+    // -------------------------------------
 
     uint32_t adaptive_route(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*));
     uint32_t replace_worst_choice(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*),uint32_t my_choice);

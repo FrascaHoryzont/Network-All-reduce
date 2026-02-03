@@ -5,6 +5,7 @@
 int Packet::_data_packet_size = DEFAULTDATASIZE;
 bool Packet::_packet_size_fixed = false;
 PacketFlow Packet::_defaultFlow(nullptr);
+PacketDB<IncPacket> IncPacket::_packetdb;
 
 // use set_attrs only when we want to do a late binding of the route -
 // otherwise use set_route or set_rg
