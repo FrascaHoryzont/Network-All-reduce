@@ -49,7 +49,7 @@ void FatTreeSwitch::receivePacket(Packet& pkt){
              // Dobbiamo trasformare il pacchetto in un RESULT e mandarlo GIÙ.
              cout << "!!! GLOBAL AGGREGATION COMPLETE !!! Root Switch " << _id 
                   << " broadcasting RESULT DOWN for Block " << pkt._inc_block_id << endl;
-             
+             send_inc_result_down(&pkt);
              // TODO: Implementare send_inc_result_down(&pkt);
              pkt.free();
              return;
@@ -89,10 +89,13 @@ void FatTreeSwitch::receivePacket(Packet& pkt){
 
 void FatTreeSwitch::addHostPort(int addr, int flowid, PacketSink* transport_port){
     Route* rt = new Route();
-    rt->push_back(_ft->queues_nlp_ns[_ft->cfg().HOST_POD_SWITCH(addr)][addr][0]);
+    BaseQueue* q = _ft->queues_nlp_ns[_ft->cfg().HOST_POD_SWITCH(addr)][addr][0];
+    
+    rt->push_back(q);
     rt->push_back(_ft->pipes_nlp_ns[_ft->cfg().HOST_POD_SWITCH(addr)][addr][0]);
     rt->push_back(transport_port);
     _fib->addHostRoute(addr,rt,flowid);
+    q->setRemoteEndpoint(transport_port);
 }
 
 uint32_t mhash(uint32_t x) {
@@ -649,41 +652,89 @@ bool FatTreeSwitch::hasUpLinks(){
     return false;
 }
 void FatTreeSwitch::handle_inc_packet(Packet* p) {
+    // -----------------------------------------------------------
+    // 1. GESTIONE PACCHETTI IN DISCESA (RESULT)
+    // -----------------------------------------------------------
+    if (p->type() == INC_RESULT) {
+        uint32_t dest = p->dst();
+
+        // Verifica di sicurezza: Questo switch serve davvero questo Host?
+        // _ft è il puntatore alla topologia, cfg() la configurazione.
+        if (_ft->cfg().HOST_POD_SWITCH(dest) == _id) {
+            BaseQueue* q = _ft->queues_nlp_ns[_id][dest][0];
+
+            if (q && q->getRemoteEndpoint()) {
+                // 1. Creiamo la "Mappa Nuova" che contiene solo l'Host
+                Route* final_route = new Route();
+                final_route->push_back(q->getRemoteEndpoint()); 
+                
+                // 2. Assegniamo la mappa al pacchetto
+                // (set_route azzera AUTOMATICAMENTE nexthop a 0)
+                p->set_route(*final_route);
+                
+                // 3. Impostiamo il prossimo passo fisico immediato
+                p->set_next_hop(q->getRemoteEndpoint());
+
+                cout << "DEBUG_SWITCH: ToR " << _id << " delivering RESULT to Host " << dest << endl;
+                
+                // 4. Spediamo
+                q->receivePacket(*p);
+                return;
+            }
+        } else {
+            // Se riceviamo un pacchetto per un host che non è nostro (caso raro in small fat tree)
+            cerr << "ERROR: ToR " << _id << " received RESULT for non-local Host " << dest << endl;
+        }
+
+        p->free();
+        return;
+    }
+
+    // -----------------------------------------------------------
+    // 2. GESTIONE PACCHETTI IN SALITA (AGGREGAZIONE)
+    // -----------------------------------------------------------
     uint32_t job_id = p->_inc_job_id;
     uint32_t block_id = p->_inc_block_id;
     
-    // Identifichiamo il flusso (o lo switch precedente)
+    // Identifica chi ha mandato il contributo (Host o Switch sotto)
     uint32_t contributor_id = (p->_inc_last_switch_id != -1) ? (uint32_t)p->_inc_last_switch_id : p->flow_id();
 
     auto key = std::make_pair(job_id, block_id);
     
+    // Se abbiamo già completato questo blocco, ignora i duplicati
+    if (_completed_blocks.find(key) != _completed_blocks.end()) {
+        p->free();
+        return;
+    }
+
     if (_aggregation_table.find(key) == _aggregation_table.end()) {
         AggregationEntry entry;
         entry.first_arrival = eventlist().now();
         _aggregation_table[key] = entry;
     }
 
-    // Inseriamo nel SET per evitare di contare i duplicati (Retransmission Storm)
     _aggregation_table[key].received_flows.insert(contributor_id);
     
-    int current_count = _aggregation_table[key].received_flows.size();
-    
-    // --- SOGLIA ---
-    // Imposta a 2 perché nel tuo test hai Node 0 e Node 1 che inviano.
+    // Per il test inc_test.cm: Node 0 e Node 1 inviano -> soglia 2
     int expected_children = 2; 
 
-    if (current_count >= expected_children) {
+    if (_aggregation_table[key].received_flows.size() >= expected_children) {
+        // Segna come completato ed elimina dalla tabella attiva
+        _completed_blocks.insert(key);
         _aggregation_table.erase(key);
+
         if (hasUpLinks()) {
-            cerr << "!!! AGGREGATION COMPLETE !!! Switch " << _id << " (Intermediate) -> Sending UP" << endl;
+            cout << "!!! AGGREGATION COMPLETE !!! Switch " << _id << " (Intermediate) -> Sending UP" << endl;
             send_aggregated_packet(job_id, block_id); 
         } else {
-            cerr << "!!! AGGREGATION COMPLETE !!! Switch " << _id << " (ROOT) -> Broadcasting DOWN" << endl;
-            //send_inc_results(job_id, block_id);
+            // Caso teorico, ma nel tuo setup gestito da receivePacket della Root
+            cout << "!!! AGGREGATION COMPLETE !!! Switch " << _id << " (ROOT) -> Broadcasting DOWN" << endl;
+            send_inc_result_down(p);
+            // Nota: qui non facciamo p->free() perché send_inc_result_down usa p come template
+            return; 
         }
     } 
     
-    // Consuma sempre il pacchetto in ingresso
     p->free();
 }
 
@@ -736,4 +787,64 @@ int FatTreeSwitch::select_best_port_towards_spine() {
         }
     }
     return best_port;
+}
+void FatTreeSwitch::send_inc_result_down(Packet* p) {
+    // 1. Definiamo i destinatari (nel test sono 0 e 1)
+    vector<uint32_t> destinations = {0, 1}; 
+
+    IncPacket* original = (IncPacket*)p;
+    
+    cout << "DEBUG_SWITCH: Root " << _id << " distributing RESULT to participants" << endl;
+
+    for (uint32_t dest_id : destinations) {
+        // A. Creiamo una COPIA
+        Route empty_route;
+        IncPacket* copy = IncPacket::newpkt(empty_route, original->_inc_job_id, original->_inc_block_id);
+        
+        copy->make_result();
+        copy->set_direction(DOWN);
+        copy->_inc_last_switch_id = getID();
+        copy->_inc_int_data = original->_inc_int_data;
+        copy->set_dst(dest_id);
+        copy->set_pathid(dest_id); 
+
+        // B. Chiediamo la rotta
+        const Route* route_to_host = getNextHop(*copy, NULL);
+
+        if (route_to_host && route_to_host->size() > 0) {
+            copy->set_route(*route_to_host);
+            
+            // CORREZIONE QUI:
+            // La Route contiene: [0]=CodaLocale, [1]=Pipe, [2]=SwitchRemoto
+            PacketSink* suggested_local_queue = route_to_host->at(0);
+            
+            bool sent = false;
+            for (size_t i = 0; i < _ports.size(); i++) {
+                BaseQueue* q = _ports.at(i);
+                
+                // CONFRONTO CORRETTO: Coda con Coda
+                if (q == suggested_local_queue) {
+                    
+                    // Impostiamo il next hop (che è l'endpoint remoto della coda)
+                    copy->set_next_hop(q->getRemoteEndpoint());
+                    
+                    cout << "DEBUG_SWITCH: Root sending RESULT clone to Host " << dest_id 
+                         << " via Port " << i << endl;
+                    
+                    q->receivePacket(*copy);
+                    sent = true;
+                    break;
+                }
+            }
+            if (!sent) {
+                cout << "DEBUG_SWITCH: Error - Route found but port mismatch for Host " << dest_id << endl;
+                copy->free();
+            }
+        } else {
+            cout << "DEBUG_SWITCH: No route found for Host " << dest_id << endl;
+            copy->free();
+        }
+    }
+    
+    // L'originale viene liberato dal chiamante (receivePacket)
 }

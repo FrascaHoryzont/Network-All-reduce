@@ -5,6 +5,7 @@
 #include "circular_buffer.h"
 #include "uec_logger.h"
 #include "pciemodel.h"
+#include "network.h"
 
 using namespace std;
 
@@ -621,6 +622,30 @@ void UecSrc::connectPort(uint32_t port_num,
 }
 
 void UecSrc::receivePacket(Packet& pkt, uint32_t portnum) {
+    if (pkt.type() == INC_RESULT) {
+        cout << "Flow " << _flow.flow_id() << " [" << _nodename 
+             << "] RECEIVED INC RESULT via Port " << portnum << ". Marking as ACKed." << endl;
+        
+        // 1. Recuperiamo il Sequence Number dal pacchetto (Block ID)
+        //    INC_RESULT usa _inc_block_id che corrisponde al seqno del pacchetto inviato.
+        IncPacket* inc_pkt = (IncPacket*)&pkt;
+        UecDataPacket::seq_t seqno = inc_pkt->_inc_block_id;
+
+        // 2. Creiamo un ACK fittizio per soddisfare UecSrc
+        //    Diciamo: "Ho ricevuto tutto fino a seqno + 1" (Cumulative ACK)
+        //    Nota: _flow è necessario per creare il pacchetto, anche se fittizio.
+        
+        // Ackno = seqno + 1 (perché l'ack è cumulativo e indica il PROSSIMO atteso)
+        UecAckPacket* fake_ack = UecAckPacket::newpkt(_flow, NULL, 0, seqno, seqno+1, 0, false, 0, 0, 0);
+        
+        // 3. Processiamo l'ACK come se fosse arrivato dalla rete
+        processAck(*fake_ack);
+        
+        // 4. Pulizia
+        fake_ack->free();
+        pkt.free();
+        return;
+    }
     switch (pkt.type()) {
         case UECDATA: {
             _stats.bounces_received++;

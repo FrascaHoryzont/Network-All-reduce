@@ -108,6 +108,8 @@ public:
     // Tabella di aggregazione: Key = <Job_ID, Block_ID>
     std::map<std::pair<uint32_t, uint32_t>, AggregationEntry> _aggregation_table;
 
+    set<pair<uint32_t, uint32_t>> _completed_blocks;
+
     // Timeout per Canary (default 1 microsecondo)
     simtime_picosec _inc_timeout = 1000; 
 
@@ -115,6 +117,7 @@ public:
     void handle_inc_packet(Packet* p);
     void send_aggregated_packet(uint32_t job_id, uint32_t block_id);
     int select_best_port_towards_spine();
+    void send_inc_result_down(Packet* p);
     // -------------------------------------
 
     uint32_t adaptive_route(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*));

@@ -692,7 +692,8 @@ int main(int argc, char **argv) {
     } 
 
     //2 priority queues; 3 hops for incast
-    UecSrc::_min_rto = timeFromUs(15 + queuesize * 6.0 * 8 * 1000000 / linkspeed);
+    //UecSrc::_min_rto = timeFromUs(15 + queuesize * 6.0 * 8 * 1000000 / linkspeed);
+    UecSrc::_min_rto = timeFromUs((uint32_t)1000);
     cout << "Setting min RTO to " << timeAsUs(UecSrc::_min_rto) << endl;
 
     if (ecn){
