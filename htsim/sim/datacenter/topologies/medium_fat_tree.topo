@@ -1,0 +1,27 @@
+nodes 16
+tiers 3
+podsize 4
+
+tier 0
+oversubscribed 1
+downlink_speed_gbps 100
+radix_down 2
+radix_up 2
+downlink_latency_ns 500
+switch_latency_ns 0
+bundle 1
+
+tier 1
+downlink_speed_gbps 100
+radix_down 2
+radix_up 2
+downlink_latency_ns 500
+switch_latency_ns 0
+bundle 1
+
+tier 2
+downlink_speed_gbps 100
+radix_down 4
+downlink_latency_ns 500
+switch_latency_ns 0
+bundle 1

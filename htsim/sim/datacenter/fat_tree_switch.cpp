@@ -43,17 +43,6 @@ void FatTreeSwitch::receivePacket(Packet& pkt){
         return;
     }
     if (pkt._is_inc) {
-        if (!hasUpLinks()) {
-             // Siamo in cima (Spine/Agg in 2-tier). 
-             // Qui l'aggregazione è finita globalmente.
-             // Dobbiamo trasformare il pacchetto in un RESULT e mandarlo GIÙ.
-             cout << "!!! GLOBAL AGGREGATION COMPLETE !!! Root Switch " << _id 
-                  << " broadcasting RESULT DOWN for Block " << pkt._inc_block_id << endl;
-             send_inc_result_down(&pkt);
-             // TODO: Implementare send_inc_result_down(&pkt);
-             pkt.free();
-             return;
-        }
         handle_inc_packet(&pkt); 
         return; 
     }
@@ -715,8 +704,31 @@ void FatTreeSwitch::handle_inc_packet(Packet* p) {
 
     _aggregation_table[key].received_flows.insert(contributor_id);
     
-    // Per il test inc_test.cm: Node 0 e Node 1 inviano -> soglia 2
-    int expected_children = 2; 
+    /// Calcolo dinamico basato sulla configurazione caricata dal file .topo
+    int expected_children = 0;
+
+    if (_type == TOR) {
+        // Il ToR aspetta pacchetti dagli HOST collegati sotto di lui.
+        // Tier 0 è il livello ToR.
+        expected_children = _ft->cfg().radix_down(TOR_TIER); 
+    } 
+    else if (_type == AGG) {
+        // L'Aggregation aspetta pacchetti dai ToR collegati sotto di lui.
+        // Tier 1 è il livello Aggregation.
+        expected_children = _ft->cfg().radix_down(AGG_TIER);
+    }
+    else if (_type == CORE) {
+        // Il Core aspetta pacchetti dagli Aggregation switches (uno per Pod).
+        // Tier 2 è il livello Core.
+        // Nota: Nel FatTree standard, radix_down del Core = numero di Pod (K).
+        expected_children = _ft->cfg().radix_down(CORE_TIER);
+    }
+
+    // --- FALLBACK DI SICUREZZA PER IL TUO TEST ---
+    // Se non vuoi implementare la logica complessa sopra ORA,
+    // e sai che nel tuo test a 16 nodi (Medium) usi 4 sorgenti (una per pod):
+    if (_type == CORE) expected_children = 4; // 4 Pods
+    else expected_children = 2; // ToR e Agg aggregano 2 link sotto di loro 
 
     if (_aggregation_table[key].received_flows.size() >= expected_children) {
         // Segna come completato ed elimina dalla tabella attiva
