@@ -688,9 +688,10 @@ void FatTreeSwitch::handle_inc_packet(Packet* p) {
     if (_aggregation_table.find(key) == _aggregation_table.end()) {
         AggregationEntry entry;
         entry.first_arrival = eventlist().now();
+        entry.aggregated_data = 0;
         _aggregation_table[key] = entry;
     }
-
+    _aggregation_table[key].aggregated_data += p->_inc_int_data;
     _aggregation_table[key].received_flows.insert(contributor_id);
     
     /// Calcolo dinamico basato sulla configurazione caricata dal file .topo
@@ -710,16 +711,17 @@ void FatTreeSwitch::handle_inc_packet(Packet* p) {
     } 
 
     if (_aggregation_table[key].received_flows.size() >= expected_children) {
+        uint32_t final_sum = _aggregation_table[key].aggregated_data;
         // Segna come completato ed elimina dalla tabella attiva
         _completed_blocks.insert(key);
         _aggregation_table.erase(key);
 
         if (hasUpLinks()) {
             cout << "!!! AGGREGATION COMPLETE !!! Switch " << _id << " (Intermediate) -> Sending UP" << endl;
-            send_aggregated_packet(job_id, block_id); 
+            send_aggregated_packet(job_id, block_id, final_sum); 
         } else {
             cout << "!!! AGGREGATION COMPLETE !!! Switch " << _id << " (ROOT) -> Broadcasting DOWN" << endl;
-            send_inc_result_down(p);
+            send_inc_result_down(p, final_sum);
             return; 
         }
     } 
@@ -727,9 +729,8 @@ void FatTreeSwitch::handle_inc_packet(Packet* p) {
     p->free();
 }
 
-void FatTreeSwitch::send_aggregated_packet(uint32_t job_id, uint32_t block_id) {
+void FatTreeSwitch::send_aggregated_packet(uint32_t job_id, uint32_t block_id,uint32_t aggregated_data) {
     int best_port = select_best_port_towards_spine();
-    int result = 0;
     if (best_port == -1) {
         // cout << "DEBUG_SWITCH: Switch " << _id << " is Root (or isolated). Aggregation finished." << endl;
         return;
@@ -745,7 +746,7 @@ void FatTreeSwitch::send_aggregated_packet(uint32_t job_id, uint32_t block_id) {
     Route* route = new Route();
     route->push_back(next_hop_sink);
 
-    IncPacket* p = IncPacket::newpkt(*route, job_id, block_id, result, INC_DATA);
+    IncPacket* p = IncPacket::newpkt(*route, job_id, block_id, aggregated_data, INC_DATA);
 
     p->_inc_last_switch_id = getID();
     
@@ -777,7 +778,7 @@ int FatTreeSwitch::select_best_port_towards_spine() {
     }
     return best_port;
 }
-void FatTreeSwitch::send_inc_result_down(Packet* p) {
+void FatTreeSwitch::send_inc_result_down(Packet* p, uint32_t aggregated_data) {
     vector<uint32_t> destinations = _job_participants; 
 
     IncPacket* original = (IncPacket*)p;
@@ -788,7 +789,7 @@ void FatTreeSwitch::send_inc_result_down(Packet* p) {
         Route* complete_route = build_route_core_to_host(dest_id);
 
         // Creiamo il pacchetto con la rotta già impostata
-        IncPacket* copy = IncPacket::newpkt(*complete_route, original->_inc_job_id, original->_inc_block_id);
+        IncPacket* copy = IncPacket::newpkt(*complete_route, original->_inc_job_id, original->_inc_block_id, aggregated_data);
         copy->make_result();
         copy->set_direction(DOWN);
         copy->set_dst(dest_id);

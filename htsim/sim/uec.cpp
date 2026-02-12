@@ -623,12 +623,13 @@ void UecSrc::connectPort(uint32_t port_num,
 
 void UecSrc::receivePacket(Packet& pkt, uint32_t portnum) {
     if (pkt.type() == INC_RESULT) {
+        IncPacket* inc_pkt = (IncPacket*)&pkt;
         cout << "Flow " << _flow.flow_id() << " [" << _nodename 
-             << "] RECEIVED INC RESULT via Port " << portnum << ". Marking as ACKed." << endl;
+             << "] RECEIVED INC RESULT via Port " << portnum 
+             << ". FINAL REDUCED SUM: " << inc_pkt->_inc_int_data << " (Block ID: " << inc_pkt->_inc_block_id << ")" << endl;
         
         // 1. Recuperiamo il Sequence Number dal pacchetto (Block ID)
         //    INC_RESULT usa _inc_block_id che corrisponde al seqno del pacchetto inviato.
-        IncPacket* inc_pkt = (IncPacket*)&pkt;
         UecDataPacket::seq_t seqno = inc_pkt->_inc_block_id;
 
         // 2. Creiamo un ACK fittizio per soddisfare UecSrc
@@ -2124,8 +2125,7 @@ mem_b UecSrc::sendNewPacket(const Route& route) {
         // Packet 1 from Host A corresponds to Packet 1 from Host B.
         p->_inc_block_id = _highest_sent;
 
-        // DATA TYPE: 0 = Float (Simulated)
-        p->_inc_int_data = 0; 
+        p->_inc_int_data = 10; 
 
         p->_inc_last_switch_id = -1;
 

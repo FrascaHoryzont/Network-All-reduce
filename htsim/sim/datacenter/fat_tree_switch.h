@@ -118,9 +118,9 @@ public:
 
     // Funzioni helper che implementeremo in switch.cpp
     void handle_inc_packet(Packet* p);
-    void send_aggregated_packet(uint32_t job_id, uint32_t block_id);
+    void send_aggregated_packet(uint32_t job_id, uint32_t block_id, uint32_t aggregated_data);
     int select_best_port_towards_spine();
-    void send_inc_result_down(Packet* p);
+    void send_inc_result_down(Packet* p, uint32_t aggregated_data);
     // -------------------------------------
 
     uint32_t adaptive_route(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*));

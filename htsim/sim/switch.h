@@ -33,6 +33,7 @@ class RouteTable;
 struct AggregationEntry {
     std::set<uint32_t> received_flows; // <--- USIAMO UN SET PER EVITARE DUPLICATI
     simtime_picosec first_arrival;
+    uint32_t aggregated_data = 0;
 };
 
 class Switch : public EventSource, public Drawable, public PacketSink {
