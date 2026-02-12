@@ -5,6 +5,7 @@
 #include <iostream>
 #include "math.h"
 #include <memory>
+#include "fat_tree_switch.h"
 
 ConnectionMatrix::ConnectionMatrix(uint32_t n)
 {
@@ -748,6 +749,7 @@ bool ConnectionMatrix::load(istream& file){
             string destination_part = tokens[0].substr(dstix);
             if(destination_part=="#"){
                 c->dst=UINT32_MAX;
+                FatTreeSwitch::add_job_participant(c->src);
             } else {
                 c->dst = stoi(destination_part);
             }

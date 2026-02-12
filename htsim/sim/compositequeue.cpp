@@ -154,16 +154,9 @@ void CompositeQueue::receivePacket(Packet& pkt)
         if (_switch) {
             int pkt_sw = pkt._inc_last_switch_id;
             int my_sw = (int)_switch->getID();
-            
-            if (pkt_sw != my_sw) {
-                // STAMPA MIGLIORATA: Include Flow ID e Sequence Number
-                cerr << "DIAG_QUEUE: Intercepting Pkt (AllocID " << pkt.id() 
-                     << ", Flow " << pkt.flow_id() 
-                     << ", Seq " << pkt._inc_block_id << ") " // Assumendo block_id = seq
-                     << " from Switch " << pkt_sw << " to My Switch " << my_sw << endl;
-                
+
+            if (pkt_sw != my_sw && pkt.get_direction() != DOWN) { 
                 _switch->receivePacket(pkt);
-                // cerr << "DIAG_QUEUE: Returned." << endl; // Rimuoviamo per pulizia
                 return; 
             }
         }

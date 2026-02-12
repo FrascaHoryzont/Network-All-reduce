@@ -110,8 +110,11 @@ public:
 
     set<pair<uint32_t, uint32_t>> _completed_blocks;
 
-    // Timeout per Canary (default 1 microsecondo)
-    simtime_picosec _inc_timeout = 1000; 
+    static vector<uint32_t> _job_participants;
+
+    static void add_job_participant(uint32_t host_id);
+
+    Route* build_route_core_to_host(uint32_t dest_id);
 
     // Funzioni helper che implementeremo in switch.cpp
     void handle_inc_packet(Packet* p);
