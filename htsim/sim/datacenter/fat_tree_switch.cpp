@@ -22,14 +22,20 @@ void FatTreeSwitch::add_job_participant(uint32_t host_id) {
 Route* FatTreeSwitch::build_route_core_to_host(uint32_t dest_id) {
     Route* r = new Route();
     uint32_t b = 0; // bundle index
+    uint32_t agg_target;
 
     // --- 1. CORE -> AGG ---
-    uint32_t pod_id = _ft->cfg().HOST_POD(dest_id);
-    uint32_t agg_target = _ft->cfg().MIN_POD_AGG_SWITCH(pod_id) + (_id % _ft->cfg().agg_switches_per_pod());
-    
-    r->push_back(_ft->queues_nc_nup[_id][agg_target][b]);
-    r->push_back(_ft->pipes_nc_nup[_id][agg_target][b]);
-    r->push_back(_ft->queues_nc_nup[_id][agg_target][b]->getRemoteEndpoint());
+    if (_ft->cfg().get_tiers() == 3) {
+        uint32_t pod_id = _ft->cfg().HOST_POD(dest_id);
+        agg_target = _ft->cfg().MIN_POD_AGG_SWITCH(pod_id) + (_id % _ft->cfg().agg_switches_per_pod());
+        
+        r->push_back(_ft->queues_nc_nup[_id][agg_target][b]);
+        r->push_back(_ft->pipes_nc_nup[_id][agg_target][b]);
+        r->push_back(_ft->queues_nc_nup[_id][agg_target][b]->getRemoteEndpoint());
+    }
+    else{
+        agg_target=_id;
+    }
 
     // --- 2. AGG -> TOR ---
     uint32_t tor_target = _ft->cfg().HOST_POD_SWITCH(dest_id);
