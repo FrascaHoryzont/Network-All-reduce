@@ -1,11 +1,8 @@
 Nodes 16
-Connections 16
+Connections 13
 Triggers 0
 0-># id 1 start 0 size 1000
 1-># id 2 start 0 size 1000
-2-># id 3 start 0 size 1000
-3-># id 4 start 0 size 1000
-4-># id 5 start 0 size 1000
 5-># id 6 start 0 size 1000
 6-># id 7 start 0 size 1000
 7-># id 8 start 0 size 1000

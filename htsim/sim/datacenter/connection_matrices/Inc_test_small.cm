@@ -1,7 +1,5 @@
 Nodes 4
-Connections 4
+Connections 2
 Triggers 0
 0-># id 1 start 0 size 1000
 1-># id 2 start 0 size 1000
-2-># id 3 start 0 size 1000
-3-># id 4 start 0 size 1000

@@ -165,6 +165,12 @@ private:
 
     static unordered_map<BaseQueue*,uint32_t> _port_flow_counts;
 
+    //logica di mappatura porte 
+    std::vector<int> get_multicast_ports(const std::vector<uint32_t>& participants);
+    bool is_destination_downstream(uint32_t dest_id);
+    void send_multicast_down(Packet* p, uint32_t aggregated_data);
+    int calculate_expected_children();
+
     uint32_t _crt_route;
     uint32_t _hash_salt;
     simtime_picosec _last_choice;

@@ -53,6 +53,144 @@ Route* FatTreeSwitch::build_route_core_to_host(uint32_t dest_id) {
     return r;
 }
 
+bool FatTreeSwitch::is_destination_downstream(uint32_t dest_id) {
+    if (_type == TOR) {
+        // Sono un ToR: l'host è downstream solo se è direttamente connesso a me
+        return _ft->cfg().HOST_POD_SWITCH(dest_id) == _id;
+    }
+    if (_type == AGG) {
+        // Sono un AGG: l'host è downstream se si trova nel mio stesso POD
+        return _ft->cfg().HOST_POD(dest_id) == _ft->cfg().AGG_SWITCH_POD_ID(_id);
+    }
+    if (_type == CORE) {
+        // Sono un CORE: tutti gli host sono tecnicamente downstream
+        return true;
+    }
+    return false;
+}
+
+vector<int> FatTreeSwitch::get_multicast_ports(const vector<uint32_t>& participants) {
+    set<int> unique_ports; 
+    
+    for (uint32_t dest_id : participants) {
+        if (!is_destination_downstream(dest_id)) continue;
+
+        int port_index = -1;
+
+        if (_type == TOR) {
+            BaseQueue* q = _ft->queues_nlp_ns[_id][dest_id][0];
+            if (q) {
+                for(size_t i = 0; i < _ports.size(); ++i) {
+                    if (_ports[i] == q) { 
+                        port_index = i; 
+                        break; 
+                    }
+                }
+            }
+        } 
+        else if (_type == AGG || _type == CORE) {
+            // Creiamo un pacchetto fittizio solo per interrogare la logica di routing
+            // Oppure usiamo la conoscenza della topologia diretta:
+            
+            uint32_t target_switch_id;
+            if (_type == AGG) {
+                target_switch_id = _ft->cfg().HOST_POD_SWITCH(dest_id);
+                BaseQueue* q = _ft->queues_nup_nlp[_id][target_switch_id][0];
+                for(size_t i=0; i<_ports.size(); ++i) {
+                    if (_ports[i] == q) { port_index = i; break; }
+                }
+            } 
+            else if (_type == CORE) {
+                // Calcola l'ID dell'AGG nel Pod di destinazione
+                uint32_t pod_id = _ft->cfg().HOST_POD(dest_id);
+                uint32_t agg_min = _ft->cfg().MIN_POD_AGG_SWITCH(pod_id);
+                // Usiamo build_route_core_to_host per "sbirciare" il primo hop
+                Route* r = build_route_core_to_host(dest_id);
+                if (r && r->size() > 0) {
+                    BaseQueue* q = (BaseQueue*)r->at(0);
+                    for(size_t i=0; i<_ports.size(); ++i) {
+                        if (_ports[i] == q) { port_index = i; break; }
+                    }
+                    delete r;
+                }
+            }
+        }
+
+        if (port_index != -1) {
+            unique_ports.insert(port_index);
+        }
+    }
+    return vector<int>(unique_ports.begin(), unique_ports.end());
+}
+
+int FatTreeSwitch::calculate_expected_children() {
+    if (_job_participants.empty()) return 0;
+
+    if (_type == TOR) {
+        // Un ToR si aspetta un pacchetto per ogni host partecipante direttamente connesso a lui
+        int expected = 0;
+        for (uint32_t host_id : _job_participants) {
+            if (_ft->cfg().HOST_POD_SWITCH(host_id) == _id) {
+                expected++;
+            }
+        }
+        return expected;
+    } 
+    else if (_type == AGG) {
+        // Un AGG si aspetta un pacchetto per ogni ToR nel suo POD che ha ALMENO UN host partecipante
+        std::set<uint32_t> active_tors;
+        uint32_t my_pod = _ft->cfg().AGG_SWITCH_POD_ID(_id);
+        
+        for (uint32_t host_id : _job_participants) {
+            if (_ft->cfg().HOST_POD(host_id) == my_pod) {
+                active_tors.insert(_ft->cfg().HOST_POD_SWITCH(host_id));
+            }
+        }
+        return active_tors.size(); // Il numero di ToR unici coinvolti
+    } 
+    else if (_type == CORE) {
+        // Un CORE si aspetta un pacchetto per ogni POD che ha ALMENO UN host partecipante
+        std::set<uint32_t> active_pods;
+        for (uint32_t host_id : _job_participants) {
+            active_pods.insert(_ft->cfg().HOST_POD(host_id));
+        }
+        return active_pods.size(); // Il numero di Pod unici coinvolti
+    }
+    
+    return 0;
+}
+
+void FatTreeSwitch::send_multicast_down(Packet* p, uint32_t aggregated_data) {
+    //IncPacket* original = (IncPacket*)p;
+    
+    // 1. Ottieni le porte su cui inviare 
+    vector<int> target_ports = get_multicast_ports(_job_participants);
+
+    cout << "DEBUG_SWITCH: Switch " << _id << " Multicasting result to " << target_ports.size() << " ports." << endl;
+
+    for (int port_index : target_ports) {
+        BaseQueue* q = _ports.at(port_index);
+        PacketSink* next_hop_sink = q->getRemoteEndpoint();
+
+        // 2. Clona il pacchetto
+        
+        Route* hop_route = new Route();
+        hop_route->push_back(next_hop_sink);
+
+        IncPacket* copy = IncPacket::newpkt(*hop_route, p->_inc_job_id, p->_inc_block_id, aggregated_data);
+        copy->make_result(); // Imposta tipo INC_RESULT
+        copy->set_direction(DOWN);
+        
+        // Importante: setta il next hop 
+        copy->set_next_hop(next_hop_sink);
+        
+        // Firma
+        copy->_inc_last_switch_id = getID();
+
+        q->receivePacket(*copy);
+    }
+}
+
 FatTreeSwitch::FatTreeSwitch(EventList& eventlist, string s, switch_type t, uint32_t id,simtime_picosec delay, FatTreeTopology* ft): Switch(eventlist, s) {
     _id = id;
     _type = t;
@@ -86,8 +224,11 @@ void FatTreeSwitch::receivePacket(Packet& pkt){
         
         return;
     }
-    if(pkt.type()==INC_RESULT){
-        pkt.sendOn();
+    if(pkt.type() == INC_RESULT && pkt.get_direction() == DOWN) {
+        IncPacket* p = (IncPacket*)&pkt;
+        send_multicast_down(&pkt, p->_inc_int_data);
+        
+        pkt.free(); 
         return;
     }
     if (pkt._is_inc) {
@@ -700,21 +841,13 @@ void FatTreeSwitch::handle_inc_packet(Packet* p) {
     _aggregation_table[key].aggregated_data += p->_inc_int_data;
     _aggregation_table[key].received_flows.insert(contributor_id);
     
-    /// Calcolo dinamico basato sulla configurazione caricata dal file .topo
-    int expected_children = 0;
-
-    if (_type == TOR) {
-        // Il ToR aspetta pacchetti dagli HOST collegati sotto di lui.
-        expected_children = _ft->cfg().radix_down(TOR_TIER); 
-    } 
-    else if (_type == AGG) {
-        // L'Aggregation aspetta pacchetti dai ToR collegati sotto di lui.
-        expected_children = _ft->cfg().radix_down(AGG_TIER);
+    int expected_children = calculate_expected_children();
+    
+    // Se per qualche motivo ricevo pacchetti ma non mi aspetto figli, c'è un errore
+    if (expected_children == 0) {
+        p->free();
+        return;
     }
-    else if (_type == CORE) {
-        // Il Core aspetta pacchetti dagli Aggregation switches (uno per Pod).
-        expected_children = _ft->cfg().radix_down(CORE_TIER);
-    } 
 
     if (_aggregation_table[key].received_flows.size() >= expected_children) {
         uint32_t final_sum = _aggregation_table[key].aggregated_data;
@@ -722,13 +855,28 @@ void FatTreeSwitch::handle_inc_packet(Packet* p) {
         _completed_blocks.insert(key);
         _aggregation_table.erase(key);
 
-        if (hasUpLinks()) {
-            cout << "!!! AGGREGATION COMPLETE !!! Switch " << _id << " (Intermediate) -> Sending UP" << endl;
-            send_aggregated_packet(job_id, block_id, final_sum); 
-        } else {
-            cout << "!!! AGGREGATION COMPLETE !!! Switch " << _id << " (ROOT) -> Broadcasting DOWN" << endl;
-            send_inc_result_down(p, final_sum);
-            return; 
+        bool i_cover_all_participants = true;
+        for (uint32_t participant_id : _job_participants) {
+            if (!is_destination_downstream(participant_id)) {
+                i_cover_all_participants = false;
+                break;
+            }
+        }
+
+        if (i_cover_all_participants) {
+            // CASO 1: Sono la radice del multicast (es. Core, o Agg se il job è intra-pod)
+            cout << "!!! AGGREGATION ROOT !!! Switch " << _id << " -> Starting Multicast DOWN. Sum: " << final_sum << endl;
+            send_multicast_down(p, final_sum);
+        } 
+        else if (hasUpLinks()) {
+            // CASO 2: Non copro tutti, devo mandare il risultato parziale UP
+            cout << "!!! PARTIAL AGG !!! Switch " << _id << " -> Sending UP to parent." << endl;
+            send_aggregated_packet(job_id, block_id, final_sum);
+        } 
+        else {
+            // Caso limite: Sono un Core (no uplinks) ma per qualche motivo is_destination_downstream ha fallito?
+            // Fallback sul multicast
+            send_multicast_down(p, final_sum);
         }
     } 
     
